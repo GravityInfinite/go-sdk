@@ -93,7 +93,7 @@ func (c *GEDebugConsumer) send(data string) error {
 			geLogInfo("send success: %v", result)
 		}
 	} else {
-		return errors.New(fmt.Sprintf("Unexpected Sgetus Code: %d", resp.StatusCode))
+		return errors.New(fmt.Sprintf("Unexpected Status Code: %d", resp.StatusCode))
 	}
 	return nil
 }

@@ -240,9 +240,8 @@ func (c *GEBatchConsumer) uploadEvents() error {
 						geLogInfo("send success： %v", params)
 						return nil
 					default:
-						msg := "unknown error"
-						geLogError(msg)
-						return fmt.Errorf(msg)
+                       geLogError("send fail： %v", err)
+                       return err
 					}
 				} else {
 					if err != nil {
@@ -325,14 +324,14 @@ func (c *GEBatchConsumer) send(data string, size int) (statusCode int, code int,
 
 		var result struct {
 			Code int
+			Msg string
 		}
 
 		err = json.Unmarshal(body, &result)
 		if err != nil {
 			return resp.StatusCode, 1, err
 		}
-
-		return resp.StatusCode, result.Code, nil
+		return resp.StatusCode, result.Code, errors.New(result.Msg)
 	} else {
 		return resp.StatusCode, -1, nil
 	}
