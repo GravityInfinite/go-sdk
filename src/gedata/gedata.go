@@ -2,7 +2,6 @@ package gedata
 
 import (
 	"errors"
-	"sync"
 	"time"
 )
 
@@ -54,7 +53,6 @@ type GEConsumer interface {
 
 type GEAnalytics struct {
 	consumer GEConsumer
-	mutex    *sync.RWMutex
 }
 
 // New init SDK
@@ -62,7 +60,6 @@ func New(c GEConsumer) GEAnalytics {
 	geLogInfo("init SDK success")
 	return GEAnalytics{
 		consumer: c,
-		mutex:    new(sync.RWMutex),
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 // SDK_LOG_PREFIX const
 const SDK_LOG_PREFIX = "[ge data]"
 
-var logInsgence GELogger
+var logInstance GELogger
 
 type GELogLevel int32
 
@@ -41,7 +41,7 @@ func SetLogLevel(level GELogLevel) {
 // SetCustomLogger Set a custom log input class, usually you don't need to set it up.
 func SetCustomLogger(logger GELogger) {
 	if logger != nil {
-		logInsgence = logger
+		logInstance = logger
 	}
 }
 
@@ -69,9 +69,9 @@ func geLog(level GELogLevel, format string, v ...interface{}) {
 		break
 	}
 
-	if logInsgence != nil {
+	if logInstance != nil {
 		msg := fmt.Sprintf(SDK_LOG_PREFIX+modeStr+format+"\n", v...)
-		logInsgence.Print(msg)
+		logInstance.Print(msg)
 	} else {
 		logTime := fmt.Sprintf("[%v]", time.Now().Format("2006-01-02 15:04:05.000"))
 		fmt.Printf(logTime+SDK_LOG_PREFIX+modeStr+format+"\n", v...)
