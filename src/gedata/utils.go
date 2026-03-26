@@ -13,7 +13,7 @@ const (
 	KEY_PATTERN = "^[a-zA-Z$][A-Za-z0-9_]{0,49}$"
 )
 
-// A string of 50 letters and digits that sgerts with '#' or a letter
+// A string of 50 letters and digits that starts with '#' or a letter
 var keyPattern, _ = regexp.Compile(KEY_PATTERN)
 
 func mergeProperties(target, source map[string]interface{}) {

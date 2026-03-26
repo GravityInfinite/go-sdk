@@ -86,7 +86,7 @@ func NewBatchConsumerWithConfig(config GEBatchConfig) (GEConsumer, error) {
 
 func initBatchConsumer(config GEBatchConfig) (GEConsumer, error) {
 	if config.ServerUrl == "" {
-		msg := fmt.Sprint("ServerUrl not be empty")
+		msg := fmt.Sprint("ServerUrl must not be empty")
 		geLogInfo(msg)
 		return nil, errors.New(msg)
 	}
@@ -212,53 +212,54 @@ func (c *GEBatchConsumer) innerFlush() error {
 func (c *GEBatchConsumer) uploadEvents() error {
 	buffer := c.cacheBuffer[0]
 	clientIdMap := map[string][]EventListItem{}
-	for _, i := range buffer {
-		clientId := i.ClientId
+	for _, item := range buffer {
+		clientId := item.ClientId
 		if _, ok := clientIdMap[clientId]; ok {
-			clientIdMap[clientId] = append(clientIdMap[clientId], i.EventList...)
+			clientIdMap[clientId] = append(clientIdMap[clientId], item.EventList...)
 		} else {
-			clientIdMap[clientId] = i.EventList
+			clientIdMap[clientId] = item.EventList
 		}
 	}
-	for clientId, buffer := range clientIdMap {
+	for clientId, events := range clientIdMap {
 		d := Data{
 			ClientId:  clientId,
-			EventList: buffer,
+			EventList: events,
 		}
-		geLogDebug("send len(EventList)： %v", len(buffer))
+		geLogDebug("send len(EventList): %v", len(events))
 
 		jsonBytes, err := json.Marshal(d)
-		if err == nil {
-			params := string(jsonBytes)
-			for i := 0; i < 3; i++ {
-				//statusCode, code, err := c.send(params, len(buffer))
-				statusCode, code, err := c.send(params, 1)
-				if statusCode == 200 {
-					switch code {
-					case 0:
-						c.cacheBuffer = c.cacheBuffer[1:]
-						geLogInfo("send success： %v", params)
-						return nil
-					default:
-                       geLogError("send fail： %v", err)
-                       return err
-					}
-				} else {
-					if err != nil {
-						geLogError(err.Error())
-						return err
-					} else {
-						if i == 2 {
-							msg := fmt.Sprintf("network error, but err is nil. Sgetus code is: %v", statusCode)
-							geLogError(msg)
-							return fmt.Errorf(msg)
-						}
-					}
+		if err != nil {
+			return err
+		}
+		params := string(jsonBytes)
+		sent := false
+		for i := 0; i < 3; i++ {
+			statusCode, code, sendErr := c.send(params, 1)
+			if statusCode == 200 {
+				if code == 0 {
+					geLogInfo("send success: %v", params)
+					sent = true
+					break
 				}
+				geLogError("send fail: %v", sendErr)
+				return sendErr
 			}
+			if sendErr != nil {
+				geLogError(sendErr.Error())
+				return sendErr
+			}
+			if i == 2 {
+				msg := fmt.Sprintf("network error, but err is nil. Status code is: %v", statusCode)
+				geLogError(msg)
+				return fmt.Errorf(msg)
+			}
+		}
+		if !sent {
+			return fmt.Errorf("failed to send events for clientId: %s", clientId)
 		}
 	}
 
+	c.cacheBuffer = c.cacheBuffer[1:]
 	return nil
 }
 
@@ -297,7 +298,10 @@ func (c *GEBatchConsumer) send(data string, size int) (statusCode int, code int,
 	postData := bytes.NewBufferString(encodedData)
 
 	var resp *http.Response
-	req, _ := http.NewRequest("POST", c.serverUrl, postData)
+	req, err := http.NewRequest("POST", c.serverUrl, postData)
+	if err != nil {
+		return 0, 0, err
+	}
 	req.Header.Set("user-agent", "ge-go-sdk")
 	req.Header.Set("version", SdkVersion)
 	//req.Header.Set("compress", compressType)
@@ -319,17 +323,23 @@ func (c *GEBatchConsumer) send(data string, size int) (statusCode int, code int,
 	}(resp.Body)
 
 	if resp.StatusCode == http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return resp.StatusCode, 1, readErr
+		}
 		geLogDebug(string(body))
 
 		var result struct {
 			Code int
-			Msg string
+			Msg  string
 		}
 
 		err = json.Unmarshal(body, &result)
 		if err != nil {
 			return resp.StatusCode, 1, err
+		}
+		if result.Code == 0 {
+			return resp.StatusCode, result.Code, nil
 		}
 		return resp.StatusCode, result.Code, errors.New(result.Msg)
 	} else {

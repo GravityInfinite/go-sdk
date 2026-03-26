@@ -24,6 +24,7 @@ type GELogConsumer struct {
 	fileSize       int64    // max size of single log file (MByte)
 	fileNamePrefix string   // prefix of log file
 	currentFile    *os.File // current file handler
+	fileIndex      int      // current log file index for size-based rotation
 	wg             sync.WaitGroup
 	ch             chan []byte
 	mutex          *sync.RWMutex
@@ -103,7 +104,11 @@ func (c *GELogConsumer) Add(d Data) error {
 	if jsonErr != nil {
 		err = jsonErr
 	} else {
-		c.ch <- jsonBytes
+		select {
+		case c.ch <- jsonBytes:
+		default:
+			err = errors.New("add event failed, channel is full")
+		}
 	}
 	if err != nil {
 		geLogError(err.Error())
@@ -134,6 +139,9 @@ func (c *GELogConsumer) Close() error {
 		close(c.ch)
 	}
 	c.mutex.Unlock()
+	if err == nil {
+		c.wg.Wait()
+	}
 	return err
 }
 
@@ -162,11 +170,15 @@ func (c *GELogConsumer) init() error {
 	}
 	c.currentFile = fd
 
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		defer func() {
 			if c.currentFile != nil {
 				_ = c.currentFile.Sync()
-				err = c.currentFile.Close()
+				if closeErr := c.currentFile.Close(); closeErr != nil {
+					geLogError("close log file error: %s", closeErr)
+				}
 				c.currentFile = nil
 			}
 			geLogInfo("Gracefully shutting down")
@@ -178,7 +190,7 @@ func (c *GELogConsumer) init() error {
 					return
 				}
 				jsonStr := string(rec)
-				geLogInfo("write event data: %s", jsonStr)
+				geLogDebug("write event data: %s", jsonStr)
 				c.writeToFile(jsonStr)
 			}
 		}
@@ -192,7 +204,7 @@ func (c *GELogConsumer) init() error {
 func (c *GELogConsumer) initLogFile() (*os.File, error) {
 	_, err := os.Stat(c.directory)
 	if err != nil && os.IsNotExist(err) {
-		e := os.MkdirAll(c.directory, os.ModePerm)
+		e := os.MkdirAll(c.directory, 0750)
 		if e != nil {
 			return nil, e
 		}
@@ -201,13 +213,11 @@ func (c *GELogConsumer) initLogFile() (*os.File, error) {
 	return os.OpenFile(c.constructFileName(timeStr, 0), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0664)
 }
 
-var logFileIndex = 0
-
 func (c *GELogConsumer) writeToFile(str string) {
 	timeStr := time.Now().Format(c.dateFormat)
 	// paging by Rotate Mode and current file size
 	var newName string
-	fName := c.constructFileName(timeStr, logFileIndex)
+	fName := c.constructFileName(timeStr, c.fileIndex)
 
 	if c.currentFile == nil {
 		var openFileErr error
@@ -215,7 +225,7 @@ func (c *GELogConsumer) writeToFile(str string) {
 		c.currentFile, openFileErr = os.OpenFile(fName, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0664)
 		c.mutex.Unlock()
 		if openFileErr != nil {
-			geLogInfo("open log file failed: %s\n", openFileErr)
+			geLogError("open log file failed: %s\n", openFileErr)
 			return
 		}
 	}
@@ -225,28 +235,28 @@ func (c *GELogConsumer) writeToFile(str string) {
 	} else if c.fileSize > 0 {
 		stat, _ := c.currentFile.Stat()
 		if stat.Size() > c.fileSize {
-			logFileIndex++
-			newName = c.constructFileName(timeStr, logFileIndex)
+			c.fileIndex++
+			newName = c.constructFileName(timeStr, c.fileIndex)
 		}
 	}
 	if newName != "" {
 		_ = c.currentFile.Sync()
 		err := c.currentFile.Close()
 		if err != nil {
-			geLogInfo("close file failed: %s\n", err)
+			geLogError("close file failed: %s\n", err)
 			return
 		}
 		c.mutex.Lock()
-		c.currentFile, err = os.OpenFile(fName, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0664)
+		c.currentFile, err = os.OpenFile(newName, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0664)
 		c.mutex.Unlock()
 		if err != nil {
-			geLogInfo("Rotate log file failed: %s\n", err)
+			geLogError("Rotate log file failed: %s\n", err)
 			return
 		}
 	}
 	_, err := fmt.Fprintln(c.currentFile, str)
 	if err != nil {
-		geLogInfo("LoggerWriter(%q): %s\n", c.currentFile.Name(), err)
+		geLogError("LoggerWriter(%q): %s\n", c.currentFile.Name(), err)
 		return
 	}
 }
