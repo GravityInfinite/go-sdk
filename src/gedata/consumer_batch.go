@@ -27,6 +27,7 @@ type GEBatchConsumer struct {
 	cacheBuffer   [][]Data // buffer
 	cacheCapacity int      // buffer max count
 	HttpClient    *http.Client
+	callback      func(err error, clientId string) // global error callback, invoked when report failed
 }
 
 type GEBatchConfig struct {
@@ -38,6 +39,7 @@ type GEBatchConfig struct {
 	Interval      int          // auto flush spacing (second)
 	CacheCapacity int          // cache event count
 	HttpClient    *http.Client // Custom http client. Set this parameter when you want to use your own http client
+	Callback      func(err error, clientId string) // global error callback, invoked when report failed; receives (err, clientId)
 }
 
 const (
@@ -133,6 +135,7 @@ func initBatchConsumer(config GEBatchConfig) (GEConsumer, error) {
 		cacheCapacity: cacheCapacity,
 		cacheBuffer:   make([][]Data, 0, cacheCapacity),
 		HttpClient:    httpClient,
+		callback:      config.Callback,
 	}
 
 	var interval int
@@ -229,6 +232,7 @@ func (c *GEBatchConsumer) uploadEvents() error {
 
 		jsonBytes, err := json.Marshal(d)
 		if err != nil {
+			c.reportError(err, clientId)
 			return err
 		}
 		params := string(jsonBytes)
@@ -242,25 +246,40 @@ func (c *GEBatchConsumer) uploadEvents() error {
 					break
 				}
 				geLogError("send fail: %v", sendErr)
+				if sendErr == nil {
+					sendErr = fmt.Errorf("unexpected result code: %v", code)
+				}
+				c.reportError(sendErr, clientId)
 				return sendErr
 			}
 			if sendErr != nil {
 				geLogError(sendErr.Error())
+				c.reportError(sendErr, clientId)
 				return sendErr
 			}
 			if i == 2 {
 				msg := fmt.Sprintf("network error, but err is nil. Status code is: %v", statusCode)
 				geLogError(msg)
+				c.reportError(fmt.Errorf(msg), clientId)
 				return fmt.Errorf(msg)
 			}
 		}
 		if !sent {
-			return fmt.Errorf("failed to send events for clientId: %s", clientId)
+			err := fmt.Errorf("failed to send events for clientId: %s", clientId)
+			c.reportError(err, clientId)
+			return err
 		}
 	}
 
 	c.cacheBuffer = c.cacheBuffer[1:]
 	return nil
+}
+
+// reportError invoke the global error callback when report failed
+func (c *GEBatchConsumer) reportError(err error, clientId string) {
+	if err != nil && c.callback != nil {
+		c.callback(err, clientId)
+	}
 }
 
 func (c *GEBatchConsumer) FlushAll() error {
